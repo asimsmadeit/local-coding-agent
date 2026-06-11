@@ -1,0 +1,82 @@
+# Goose config template — rendered to ~/.config/goose/config.yaml by
+# scripts/goose-setup.sh, which substitutes ${...} values from the repo .env.
+#
+# Goose is the ORCHESTRATOR (Shape B, FINDINGS.md §1): it plans with the
+# frontier model and delegates self-contained coding tasks to the OpenHands
+# implementer via the openhands_coder MCP extension. Both sides mount the
+# same OpenMemory endpoint → one shared persistent memory.
+
+# ── Planner model ─────────────────────────────────────────────────────
+# Company environment: Bedrock via the standard AWS credential chain
+# (PrivateLink + scoped endpoint policy per IMPLEMENTATION_STEPS Phase 2).
+GOOSE_PROVIDER: bedrock
+GOOSE_MODEL: ${GOOSE_PLANNER_MODEL}
+# Outside/dev without Bedrock: comment the two lines above and use any
+# OpenAI-compatible endpoint instead:
+#GOOSE_PROVIDER: openai
+#GOOSE_MODEL: ${LOCAL_LLM_MODEL}
+#OPENAI_HOST: ${LOCAL_LLM_BASE_URL_HOST}
+
+# Auto-compact context at 80% of the window (Goose built-in).
+GOOSE_AUTO_COMPACT_THRESHOLD: 0.8
+
+extensions:
+  # Core file/shell tools (bundled with Goose).
+  developer:
+    type: builtin
+    name: developer
+    display_name: Developer
+    timeout: 300
+    bundled: true
+
+  # ── Shared persistent memory (OpenMemory MCP) ─────────────────────
+  # Goose dropped SSE transport, so we bridge OpenMemory's SSE endpoint
+  # to stdio via mcp-proxy (runs with uvx, no install step).
+  openmemory:
+    enabled: true
+    type: stdio
+    name: openmemory
+    description: Shared persistent memory (preferences, project decisions, playbooks) — also mounted by the OpenHands coder
+    cmd: uvx
+    args:
+      - mcp-proxy
+      - ${OPENMEMORY_MCP_URL}/mcp/goose/sse/${MEMORY_USER_ID}
+    timeout: 120
+
+  # ── Delegated implementer (OpenHands agent behind a task-shaped MCP) ─
+  openhands_coder:
+    enabled: true
+    type: stdio
+    name: openhands_coder
+    description: Delegate self-contained coding tasks (full spec in, diff + summary out) to the OpenHands implementer running the local model
+    cmd: ${CODER_BIN_DIR}/openhands-coder
+    args: []
+    envs:
+      OPENHANDS_LLM_MODEL: ${OPENHANDS_LLM_MODEL}
+      OPENHANDS_LLM_BASE_URL: ${OPENHANDS_LLM_BASE_URL}
+      OPENHANDS_LLM_API_KEY: ${OPENHANDS_LLM_API_KEY}
+      OPENHANDS_MAX_ITERATIONS: "${OPENHANDS_MAX_ITERATIONS}"
+      OPENMEMORY_MCP_URL: ${OPENMEMORY_MCP_URL}
+      MEMORY_USER_ID: ${MEMORY_USER_ID}
+      MEMORY_APP_NAME: openhands
+      MEMORY_NOTES_DIR: ${MEMORY_NOTES_DIR}
+      PREFERENCES_FILE: ${PROJECT_ROOT}/prefs/preferences.md
+    timeout: 1800
+
+  # ── Curated memory: verbatim markdown notes + index (Claude Code model) ─
+  # get_memory_index (read at session start) / save_note / read_note /
+  # delete_note. Notes are plain files under MEMORY_NOTES_DIR — exact wording
+  # preserved, human-reviewable, shared with the OpenHands coder. The
+  # openmemory extension remains the EPISODIC layer (semantic search over
+  # extracted fragments).
+  memory_direct:
+    enabled: true
+    type: stdio
+    name: memory_direct
+    description: Curated memory notes (index + verbatim markdown files) shared with the OpenHands coder — read get_memory_index at session start
+    cmd: ${CODER_BIN_DIR}/memory-direct
+    args: []
+    envs:
+      MEMORY_NOTES_DIR: ${MEMORY_NOTES_DIR}
+      MEMORY_APP_NAME: goose
+    timeout: 60

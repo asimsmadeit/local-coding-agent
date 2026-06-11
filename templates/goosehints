@@ -1,0 +1,23 @@
+# Project hints for Goose — copy this file to the ROOT of each work repo as
+# `.goosehints` and fill it in. Goose auto-loads it every session in that
+# repo (the CLAUDE.md pattern: deterministic, never retrieved).
+
+## What this repo is
+<one paragraph: purpose, main language/framework, entry points>
+
+## Build & test
+- Install: <command>
+- Run tests: <command — the agent should run this to verify changes>
+- Lint/typecheck: <command>
+
+## Conventions
+- <code style rules that differ from defaults>
+- <directory layout: where source, tests, configs live>
+
+## Gotchas
+- <things that look wrong but are intentional>
+- <slow/fragile tests, generated files not to edit, etc.>
+
+## Delegation notes
+- When delegating to openhands_coder, include the test command above in every
+  spec — the implementer cannot ask follow-up questions.

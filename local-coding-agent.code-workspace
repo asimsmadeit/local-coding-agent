@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"name": "local-coding-agent",
+			"path": "."
+		},
+		{
+			"name": "OpenHands-main",
+			"path": "../Downloads/OpenHands-main"
+		}
+	],
+	"settings": {}
+}

@@ -1,0 +1,54 @@
+# Self-hosted shared memory: OpenMemory MCP (mem0) + Qdrant.
+# Both Goose and the OpenHands coder mount the same MCP endpoint, so they
+# share one persistent memory space keyed by MEMORY_USER_ID.
+#
+# Start via: ./scripts/memory-up.sh   (reads .env at repo root)
+# MCP endpoint (SSE):  http://localhost:8765/mcp/<client-name>/sse/<user-id>
+# REST/docs:           http://localhost:8765/docs
+# UI:                  http://localhost:3000
+
+services:
+  mem0_store:
+    image: qdrant/qdrant
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+
+  openmemory-mcp:
+    image: mem0/openmemory-mcp:latest
+    restart: unless-stopped
+    depends_on:
+      - mem0_store
+    ports:
+      - "127.0.0.1:8765:8765"
+    environment:
+      - USER=${MEMORY_USER_ID:-default}
+      - QDRANT_HOST=mem0_store
+      - QDRANT_PORT=6333
+      # Fully-local memory: extraction LLM + embeddings served by llama.cpp
+      # on the host behind the LiteLLM gateway (scripts/local-llm-up.sh).
+      # mem0 runs with provider "openai" but the OpenAI client follows
+      # OPENAI_BASE_URL — no data leaves the machine.
+      # (Note: this image persists llm/embedder choice in its DB; set it once
+      # via PUT /api/v1/config/mem0/{llm,embedder} — scripts/memory-up.sh does
+      # this automatically.)
+      - OPENAI_BASE_URL=http://host.docker.internal:4000/v1
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-local}
+      # Persist memory metadata (SQLite) outside the container so recreates
+      # don't lose it (vectors already persist via the qdrant volume).
+      - DATABASE_URL=sqlite:////data/openmemory.db
+    volumes:
+      - ./data/api:/data
+
+  openmemory-ui:
+    image: mem0/openmemory-ui:latest
+    restart: unless-stopped
+    depends_on:
+      - openmemory-mcp
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8765
+      - NEXT_PUBLIC_USER_ID=${MEMORY_USER_ID:-default}

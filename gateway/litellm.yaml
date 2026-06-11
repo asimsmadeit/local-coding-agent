@@ -1,0 +1,37 @@
+# LiteLLM gateway — one OpenAI-compatible endpoint routing by model name.
+# Dev (this Mac): routes to two local llama-server instances.
+# Company: same component, pointed at the vLLM box / Bedrock instead — this
+# is the authenticating gateway from IMPLEMENTATION_STEPS Phase 1.4.
+model_list:
+  # Dev-tier coder for exercising the full agent loop without Bedrock/vLLM.
+  # Stable alias — swap the model behind :8083 without touching other configs.
+  # Currently Qwen3-4B-Instruct (Qwen2.5-Coder-7B was tried first: its tool
+  # calling is broken in llama-server — emits free-text pseudo-XML even at
+  # temp 0 with the official template and tool_choice=required).
+  - model_name: dev-coder
+    litellm_params:
+      model: openai/dev-coder
+      api_base: http://localhost:8083/v1
+      api_key: local
+  - model_name: qwen2.5-3b-instruct
+    litellm_params:
+      model: openai/qwen2.5-3b-instruct
+      api_base: http://localhost:8082/v1
+      api_key: local
+  - model_name: nomic-embed-text-v1.5
+    litellm_params:
+      model: openai/nomic-embed-text-v1.5
+      api_base: http://localhost:8081/v1
+      api_key: local
+  # Alias: mem0 sends a `dimensions` param, which LiteLLM only permits when
+  # the underlying model name is text-embedding-3-*. Same local nomic backend
+  # (llama-server serves its loaded model regardless of requested name and
+  # ignores `dimensions`; nomic is fixed 768-dim).
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_base: http://localhost:8081/v1
+      api_key: local
+
+litellm_settings:
+  drop_params: true
