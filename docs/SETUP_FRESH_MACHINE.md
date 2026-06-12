@@ -1,41 +1,39 @@
 # Setup on a Fresh Machine
 
-Every command needed to go from a clean macOS or Linux machine to a working
-agent stack. Total time: ~20 min of commands + model downloads (~5 GB) in the
-background.
+Every command needed to go from a clean macOS, Linux, or Windows machine to a
+working agent stack. Total time: ~15 min. No GPU and no local models — all
+inference is AWS Bedrock (Claude / Nova).
 
 ## 0. Prerequisites
 
-| Requirement | macOS | Linux (Ubuntu/Debian) |
-|---|---|---|
-| Package manager | Homebrew: `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"` | apt (built in) |
-| Docker | `brew install orbstack` (or Docker Desktop) | `curl -fsSL https://get.docker.com \| sh && sudo usermod -aG docker $USER` (re-login) |
-| uv (Python manager) | `curl -LsSf https://astral.sh/uv/install.sh \| sh` | same |
-| git | included | `sudo apt install -y git` |
+| Requirement | macOS | Linux (Ubuntu/Debian) | Windows |
+|---|---|---|---|
+| Docker | `brew install orbstack` (or Docker Desktop) | `curl -fsSL https://get.docker.com \| sh && sudo usermod -aG docker $USER` (re-login) | Docker Desktop (WSL2 backend) |
+| uv (Python manager) | `curl -LsSf https://astral.sh/uv/install.sh \| sh` | same | `powershell -c "irm https://astral.sh/uv/install.ps1 \| iex"` |
+| git | included | `sudo apt install -y git` | git for Windows |
+| AWS CLI | `brew install awscli` | `sudo apt install -y awscli` | MSI from aws.amazon.com/cli |
 
-Hardware: 16 GB RAM minimum for the dev tier (embedder + extraction LLM +
-small coder). The implementer quality scales with what you can host — see
-`docs/BEDROCK_INTEGRATION.md` to use a remote model instead.
+Hardware: any machine that runs Docker comfortably (8 GB RAM is fine — the
+only local services are Qdrant and the OpenMemory API).
+
+AWS: credentials with Bedrock model access (Claude + Nova + Titan embeddings
+enabled in the console under Bedrock → Model access):
+
+```bash
+aws configure        # or: aws sso login --profile <profile>
+```
 
 ## 1. Host tools
 
 ```bash
 # macOS
-brew install llama.cpp block-goose-cli gettext
+brew install block-goose-cli gettext
 
 # Linux
-# llama.cpp: download a release binary or build:
-sudo apt install -y build-essential cmake
-git clone https://github.com/ggml-org/llama.cpp && cd llama.cpp
-cmake -B build && cmake --build build --config Release -j && sudo cp build/bin/llama-server /usr/local/bin/
-# goose:
 curl -fsSL https://github.com/block/goose/releases/latest/download/download_cli.sh | bash
-```
 
-Note (macOS, managed/enterprise machines): use llama.cpp, NOT Ollama — the
-Ollama brew formula has shipped without its runner binary and the app binary
-can hang under endpoint-security software. llama.cpp is also what matches the
-production architecture (OpenAI-compatible server behind a gateway).
+# Windows: install Goose from the releases page — github.com/block/goose
+```
 
 ## 2. Get the project
 
@@ -57,34 +55,41 @@ $EDITOR .env
 
 Minimum to touch:
 - `MEMORY_USER_ID` — your handle; BOTH agents share one memory under this id.
-- `OPENHANDS_LLM_MODEL` / `OPENHANDS_LLM_BASE_URL` — the implementer model.
-  Local dev tier default works out of the box; for Bedrock or any remote
-  OpenAI-compatible endpoint see `docs/BEDROCK_INTEGRATION.md`.
-- `GOOSE_PLANNER_MODEL` — Bedrock model id for the planner (company), or use
-  the dev-mode block in `goose/config-template.yaml` (no AWS needed).
+- `AWS_REGION` / `AWS_PROFILE` — where your Bedrock access lives (empty
+  profile = the default profile).
+- `OPENHANDS_LLM_MODEL` — implementer model. Default is Claude Sonnet;
+  `bedrock/us.amazon.nova-pro-v1:0` is the cheaper option.
+- `GOOSE_PLANNER_MODEL` — Bedrock model id for the planner.
 
 ## 4. Start everything
 
+macOS/Linux (repo checkout):
+
 ```bash
-./scripts/memory-up.sh     # memory stack + local model servers + gateway
-                           # (first run downloads ~5 GB of models — wait)
+./scripts/memory-up.sh     # qdrant + OpenMemory, pins mem0 to Bedrock
 ./scripts/goose-setup.sh   # renders ~/.config/goose/config.yaml,
                            #   links prefs/preferences.md as global hints
-./scripts/smoke-test.sh    # 11 checks — expect 11/11
+./scripts/smoke-test.sh    # end-to-end checks
 ```
 
-Equivalent for an installed (non-repo) machine: `localagent init && localagent
-up && localagent goose-setup && localagent doctor`.
+Windows (or any platform, CLI mode):
 
-Optional: `localagent autostart` (macOS) installs a launchd agent so services
-start at login.
+```powershell
+localagent init
+localagent up
+localagent goose-setup
+localagent doctor
+```
+
+Optional: `localagent autostart` starts services at login (launchd on macOS,
+Startup folder on Windows, XDG autostart on Linux).
 
 ## 5. Verify the agents
 
 ```bash
 cd openhands-coder && uv run pytest -q && cd ..   # expect all tests passing
 
-# Goose with all extensions (needs a planner LLM — see BEDROCK_INTEGRATION):
+# Goose with all extensions:
 goose session
 #   try: "what do you remember about me?"  → should read the memory index
 
@@ -116,9 +121,12 @@ session — build/test commands, conventions, gotchas.
 
 - `./scripts/smoke-test.sh` / `localagent doctor` first — every check names
   the fix.
-- Model server logs: `/tmp/llama-*.log`, `/tmp/litellm.log` (repo mode) or
-  `~/.config/local-coding-agent/*.log` (CLI mode).
-- Memory stack logs: `docker logs memory-openmemory-mcp-1`.
-- Tool calls coming back as text instead of structured: the model serving
-  on :8083 must support hermes-style tool calling — Qwen3-family instruct
-  models work; **Qwen2.5-Coder does not** (verified broken).
+- Memory stack logs: `docker logs memory-openmemory-mcp-1` (repo mode) or
+  `docker compose -f ~/.config/local-coding-agent/docker-compose.yml logs`.
+- Bedrock `AccessDeniedException`: the model isn't enabled for your account/
+  region — Bedrock console → Model access. `ExpiredTokenException` inside the
+  memory container: re-run `aws sso login` on the host (the container reads
+  the mounted `~/.aws` SSO cache).
+- Memory writes failing right after `up`: confirm the mem0 config pin
+  succeeded — `curl http://localhost:8765/api/v1/config/mem0/llm` should show
+  `aws_bedrock`, not `openai`.

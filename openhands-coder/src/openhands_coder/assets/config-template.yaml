@@ -1,21 +1,17 @@
 # Goose config template — rendered to ~/.config/goose/config.yaml by
 # scripts/goose-setup.sh, which substitutes ${...} values from the repo .env.
 #
-# Goose is the ORCHESTRATOR (Shape B, FINDINGS.md §1): it plans with the
+# Goose is the ORCHESTRATOR (Shape B, docs/FINDINGS.md §1): it plans with the
 # frontier model and delegates self-contained coding tasks to the OpenHands
 # implementer via the openhands_coder MCP extension. Both sides mount the
 # same OpenMemory endpoint → one shared persistent memory.
 
 # ── Planner model ─────────────────────────────────────────────────────
-# Company environment: Bedrock via the standard AWS credential chain
-# (PrivateLink + scoped endpoint policy per IMPLEMENTATION_STEPS Phase 2).
+# Bedrock via the standard AWS credential chain (PrivateLink + scoped
+# endpoint policy per IMPLEMENTATION_STEPS Phase 2). This stack is
+# Bedrock-only (Claude / Nova) — no local inference anywhere.
 GOOSE_PROVIDER: bedrock
 GOOSE_MODEL: ${GOOSE_PLANNER_MODEL}
-# Outside/dev without Bedrock: comment the two lines above and use any
-# OpenAI-compatible endpoint instead:
-#GOOSE_PROVIDER: openai
-#GOOSE_MODEL: ${LOCAL_LLM_MODEL}
-#OPENAI_HOST: ${LOCAL_LLM_BASE_URL_HOST}
 
 # Auto-compact context at 80% of the window (Goose built-in).
 GOOSE_AUTO_COMPACT_THRESHOLD: 0.8
@@ -48,7 +44,7 @@ extensions:
     enabled: true
     type: stdio
     name: openhands_coder
-    description: Delegate self-contained coding tasks (full spec in, diff + summary out) to the OpenHands implementer running the local model
+    description: Delegate self-contained coding tasks (full spec in, diff + summary out) to the OpenHands implementer (Bedrock model)
     cmd: ${CODER_BIN_DIR}/openhands-coder
     args: []
     envs:
@@ -63,7 +59,7 @@ extensions:
       PREFERENCES_FILE: ${PROJECT_ROOT}/prefs/preferences.md
     timeout: 1800
 
-  # ── Curated memory: verbatim markdown notes + index (Claude Code model) ─
+  # ── Curated memory: verbatim markdown notes + index ────────────────
   # get_memory_index (read at session start) / save_note / read_note /
   # delete_note. Notes are plain files under MEMORY_NOTES_DIR — exact wording
   # preserved, human-reviewable, shared with the OpenHands coder. The

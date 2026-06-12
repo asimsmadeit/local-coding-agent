@@ -5,7 +5,7 @@ Status of every item below: **working and verified** unless marked otherwise.
 Companion docs: `FINDINGS.md` (research/why), `IMPLEMENTATION_STEPS.md`
 (the full plan this is executing), `README.md` (how to run).
 
-Last updated: 2026-06-11
+Last updated: 2026-06-12
 
 ---
 
@@ -13,7 +13,7 @@ Last updated: 2026-06-11
 
 | Artifact | What it is |
 |---|---|
-| `FINDINGS.md` | Architecture audit backed by adversarially verified web research (24 sources, 25 claims 3-vote verified) + file-level audit of the Goose and OpenHands repos. Key verdicts: single-orchestrator over peer agents; model routing validated; distilling from Claude/Bedrock violates ToS (open teacher instead); memory must be external; Bedrock PrivateLink posture checks out. |
+| `FINDINGS.md` | Architecture audit backed by web research (24 primary sources, key claims cross-checked) + file-level audit of the Goose and OpenHands repos. Key verdicts: single-orchestrator over peer agents; model routing validated; distilling from Claude/Bedrock violates ToS (open teacher instead); memory must be external; Bedrock PrivateLink posture checks out. |
 | `FINDINGS.md` §9 | Project thesis: "distill to context, not weights" — playbooks authored by the planner, executed by the local model, frontier-call decay curve as the headline metric. |
 | `IMPLEMENTATION_STEPS.md` | 10-phase build plan with effort estimates, including Phase 4.5 (playbook flywheel). |
 | `playbooks/README.md` | Playbook schema and lifecycle convention (draft → trusted → retired). |
@@ -75,7 +75,7 @@ Last updated: 2026-06-11
   import — repo-root `.env` files leak into its environment.
 - Tests: 10/10 passing, no LLM or services required.
 
-## 6. Curated memory — `memory_direct.py` (knowledge layer, Claude Code model)
+## 6. Curated memory — `memory_direct.py` (knowledge layer)
 
 - MCP server exposing `get_memory_index` / `save_note` / `read_note` /
   `delete_note`. Notes are **verbatim markdown files** + an `INDEX.md`, under
@@ -87,8 +87,7 @@ Last updated: 2026-06-11
 - **Why files, not vectors:** OpenMemory's extraction dropped half of a
   two-part preference in testing, and its `infer: false` raw mode silently
   stores nothing in the shipped image. Curated memory therefore bypasses the
-  vector store entirely — which is also how Claude Code's own memory works
-  (markdown files + an index, loaded deterministically).
+  vector store entirely: markdown files + an index, loaded deterministically.
 - Verified live: the exact preference the extractor truncated round-trips
   with both halves intact.
 
@@ -109,7 +108,7 @@ Last updated: 2026-06-11
 - `templates/goosehints` and `templates/AGENTS.md` — fill-in starters to copy
   into each work repo (build/test commands, conventions, gotchas, do-nots).
   Goose auto-loads `.goosehints` natively; the wrapper injects `AGENTS.md`
-  into delegated prompts. This is the CLAUDE.md pattern under other names.
+  into delegated prompts. Deterministic context loading — injected every session, never retrieved.
 
 ## 9. Goose orchestrator configuration
 
@@ -146,8 +145,7 @@ Last updated: 2026-06-11
 - **Why pip + Docker hybrid, not full containerization:** the services are
   already containers; the agents can't be — Goose is an interactive CLI on
   the user's repos, and llama.cpp inside Docker on macOS loses Metal (no GPU
-  passthrough). The pip CLI orchestrating host pieces is the same shape as
-  Claude Code's npm package.
+  passthrough). The pip CLI orchestrates the host pieces.
 - Goose extensions now launch console scripts by absolute path (works for
   both repo-dev via `uv tool install -e` and end-user installs); the wrapper
   locates `memory-direct` next to its own interpreter.
@@ -229,12 +227,60 @@ Last updated: 2026-06-11
   both wrapper servers over stdio exactly as Goose launches them; verbatim
   write → semantic recall across the stack.
 
-## Not yet wired (by design — needs company side or a dev model)
+## 16. Re-architecture: Bedrock-only, no local inference (2026-06-12)
 
-- **Planner LLM**: Bedrock credentials + PrivateLink endpoint (Phase 2 of the
-  plan). Until then `goose session` starts but can't converse.
-- **Implementer LLM**: vLLM Qwen3-Coder endpoint (`--tool-call-parser
-  qwen3_coder` mandatory). `delegate_coding_task` fails gracefully until set.
+Constraint change: no local compute/GPU available, and the stack must run on
+Windows as well as macOS/Linux. Everything model-shaped moved to AWS Bedrock;
+everything local-inference-shaped was removed.
+
+- **Removed**: LiteLLM gateway (`gateway/`, the `:4000` proxy, the
+  `text-embedding-3-small` alias hack), `scripts/local-llm-up.sh`, both
+  llama.cpp servers (:8081 embedder, :8082 extraction), the `dev-coder`
+  local implementer tier (Qwen3-4B), all Ollama config remnants, and the
+  packaged copies of these in `openhands-coder/.../assets/`.
+- **Model sockets now** (all Bedrock, `.env`-configurable): planner =
+  Claude Sonnet; implementer = `bedrock/us.anthropic.claude-sonnet-...`
+  (Nova Pro as the cheap alternative); mem0 extraction =
+  `us.amazon.nova-lite-v1:0`; embeddings = `amazon.titan-embed-text-v2:0`
+  (1024-dim — qdrant collection pre-created accordingly).
+- **Memory container auth**: host `~/.aws` mounted read-only +
+  `AWS_*` env passthrough in `memory/docker-compose.yml`; `memory-up` /
+  `localagent up` pin mem0's `aws_bedrock` provider via the config API and
+  now FAIL LOUDLY if the API rejects the config (previously silent).
+- **Windows compatibility** (`localagent` CLI, stdlib-only): removed the
+  POSIX-only process spawning and pkill calls (nothing left to spawn);
+  `.goosehints` symlink falls back to copy where symlinks need privileges;
+  `autostart` now supports launchd (macOS), Startup-folder .bat (Windows),
+  and XDG autostart (Linux). `scripts/*.sh` remain as macOS/Linux
+  conveniences; the CLI is the cross-platform path.
+- **Live-verified up to the AWS credential boundary (2026-06-12)** — and the
+  verification caught three real blockers, all fixed:
+  1. The OpenMemory image ships WITHOUT boto3 → `aws_bedrock` provider could
+     never load. Fixed: derived image (`memory/openmemory-bedrock.Dockerfile`,
+     compose `build:`).
+  2. Setting `AWS_PROFILE` in the container (even empty) makes boto3 raise
+     ProfileNotFound BEFORE trying env keys (verified empirically in the
+     image). Fixed: container gets no AWS_PROFILE; default profile or
+     static keys only.
+  3. A qdrant collection left over from the old 768-dim local embedder would
+     reject every 1024-dim Titan write. Fixed: old points backed up
+     (`memory/data/qdrant-768dim-backup-2026-06-12.json`), collection
+     recreated at 1024; `memory-up.sh` now fails loudly on a dim mismatch.
+  Also fixed during verification: `localagent doctor` had two false
+  positives (passed on an empty `~/.aws` dir; treated HTTP 200 with an
+  `{"error": ...}` body as a successful memory write) — both now read the
+  actual evidence. Windows `.exe` console-script lookups fixed in doctor/
+  autostart; `localagent init` now also checks for the AWS CLI; `up` ensures
+  `~/.aws` exists before the bind mount and passes `--build`.
+  Fresh-install dress rehearsal (clean copy → `uv tool install` → `init` →
+  `up` → `goose-setup` → `doctor`) passes with only the two AWS-credential
+  checks failing, each naming the exact fix. Run-sheet: `docs/WINDOWS_VM.md`.
+  Still pending real credentials: one live Bedrock memory write + one real
+  delegated task. Wrapper unit tests: 18/18 passing.
+
+## Not yet wired (by design — needs company side)
+
+- **PrivateLink endpoint + scoped endpoint policy** for Bedrock (Phase 2) —
+  credentials/model access from any machine work in the meantime.
 - Evaluation harness, escalation/decay-curve dashboards, finetuning track —
   Phases 6–8 of `IMPLEMENTATION_STEPS.md`, not started.
-- Initial git commit — everything staged, awaiting go-ahead.

@@ -17,7 +17,12 @@ services:
       - ./data/qdrant:/qdrant/storage
 
   openmemory-mcp:
-    image: mem0/openmemory-mcp:latest
+    # Upstream image + boto3 (required by mem0's aws_bedrock provider —
+    # see openmemory-bedrock.Dockerfile).
+    build:
+      context: .
+      dockerfile: openmemory-bedrock.Dockerfile
+    image: openmemory-mcp-bedrock:local
     restart: unless-stopped
     depends_on:
       - mem0_store
@@ -27,20 +32,31 @@ services:
       - USER=${MEMORY_USER_ID:-default}
       - QDRANT_HOST=mem0_store
       - QDRANT_PORT=6333
-      # Fully-local memory: extraction LLM + embeddings served by llama.cpp
-      # on the host behind the LiteLLM gateway (scripts/local-llm-up.sh).
-      # mem0 runs with provider "openai" but the OpenAI client follows
-      # OPENAI_BASE_URL — no data leaves the machine.
+      # Memory extraction LLM + embeddings run on AWS Bedrock (no local
+      # inference, no GPU). Credentials: host ~/.aws mounted read-only
+      # below (default profile), and/or static AWS_* keys passed through
+      # from .env. AWS_PROFILE is deliberately NOT set here: boto3 hard-fails
+      # on any set-but-missing profile — even empty string — before trying
+      # env keys (verified live 2026-06-12). Use the default profile in the
+      # mounted ~/.aws, or static keys.
       # (Note: this image persists llm/embedder choice in its DB; set it once
-      # via PUT /api/v1/config/mem0/{llm,embedder} — scripts/memory-up.sh does
-      # this automatically.)
-      - OPENAI_BASE_URL=http://host.docker.internal:4000/v1
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-local}
+      # via PUT /api/v1/config/mem0/{llm,embedder} — scripts/memory-up.sh /
+      # `localagent up` does this automatically.)
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_DEFAULT_REGION=${AWS_REGION:-us-east-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+      # mem0 still instantiates an OpenAI client on some paths; harmless stub.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-unused}
       # Persist memory metadata (SQLite) outside the container so recreates
       # don't lose it (vectors already persist via the qdrant volume).
       - DATABASE_URL=sqlite:////data/openmemory.db
     volumes:
       - ./data/api:/data
+      # AWS credentials/SSO cache for Bedrock calls (read-only). `~` is
+      # expanded by docker compose on macOS, Linux, and Windows alike.
+      - ~/.aws:/root/.aws:ro
 
   openmemory-ui:
     image: mem0/openmemory-ui:latest

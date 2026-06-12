@@ -1,123 +1,148 @@
 # local-coding-agent
 
-Private, enterprise-safe coding agent: **Goose** orchestrates (plans with a
-frontier model), **OpenHands** implements (local model), and both share one
-persistent memory over MCP. Background and rationale: `FINDINGS.md`; full
-build plan: `IMPLEMENTATION_STEPS.md`; record of everything built so far:
-`IMPLEMENTED.md`.
+A private coding agent with persistent, shared memory. **Goose** orchestrates
+(plans tasks with a frontier model), **OpenHands** implements (executes
+delegated coding tasks), and both share one memory over MCP — preferences,
+project decisions, and reusable playbooks that carry across sessions and
+agents. All models run on **AWS Bedrock** (Claude / Nova); nothing is sent to
+any other service, no local inference, no GPU required.
 
 ```
-Goose (orchestrator, planner LLM = Bedrock Claude or any endpoint)
+Goose (orchestrator, planner LLM = Bedrock Claude)
  ├─ extension: openmemory       ──┐  shared persistent memory
- └─ extension: openhands_coder    │  (OpenMemory MCP + Qdrant, fully local:
-      └─ OpenHands SDK agent    ──┘   llama.cpp embeddings/extraction behind
-         (implementer LLM = local     a LiteLLM gateway on :4000)
-          vLLM / llama.cpp / any OpenAI-compatible endpoint)
+ └─ extension: openhands_coder    │  (OpenMemory MCP + Qdrant in Docker;
+      └─ OpenHands SDK agent    ──┘   extraction LLM = Bedrock Nova Lite,
+         (implementer LLM =           embeddings = Bedrock Titan v2)
+          Bedrock Claude or Nova)
 ```
+
+How a task flows: the orchestrator reads the memory index, recalls anything
+relevant (including playbooks from past tasks), writes a complete spec, and
+delegates it to the implementer, which edits files and runs tests in your
+repo and returns a structured diff. After review, the orchestrator writes
+what it learned back to memory — so the next similar task starts ahead.
+Every action and memory write is recorded in an append-only audit log
+(content hashes, not source code).
+
+Runs on macOS, Linux, and Windows. The `localagent` CLI (pure Python) is the
+cross-platform entry point; `scripts/*.sh` are macOS/Linux conveniences.
+
+## Quick start
+
+**1. Install the prerequisites** (each is a one-time install):
+
+| Tool | macOS | Windows |
+|---|---|---|
+| Docker | `brew install orbstack` or Docker Desktop | Docker Desktop (WSL2) |
+| uv | `curl -LsSf https://astral.sh/uv/install.sh \| sh` | `winget install astral-sh.uv` |
+| AWS CLI | `brew install awscli` | `winget install Amazon.AWSCLI` |
+| Goose | `brew install block-goose-cli` | release from github.com/block/goose |
+
+**2. Get the project and install the CLI:**
+
+```bash
+git clone <repo-url> local-coding-agent
+cd local-coding-agent
+uv tool install -e ./openhands-coder --force
+localagent init          # materializes configs + checks the prerequisites
+```
+
+**3. Add your Bedrock access** — the only configuration there is:
+
+```bash
+aws configure            # paste your AWS access key / secret / region
+```
+
+Use the **default** profile. In the AWS console under **Bedrock → Model
+access**, enable: your two chosen models below, plus `amazon.nova-lite-v1:0`
+and `amazon.titan-embed-text-v2:0` (they power the memory backend).
+
+**4. Pick your two models** — edit `~/.config/local-coding-agent/.env`
+(Windows: `%USERPROFILE%\.config\local-coding-agent\.env`):
+
+```bash
+GOOSE_PLANNER_MODEL=us.anthropic.claude-sonnet-4-5-20250929-v1:0          # planner
+OPENHANDS_LLM_MODEL=bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0  # implementer
+```
+
+The planner is a bare Bedrock model id; the implementer takes a `bedrock/`
+prefix. (`bedrock/us.amazon.nova-pro-v1:0` is the budget implementer option.)
+
+**5. Start it and check everything:**
+
+```bash
+localagent up            # memory stack in Docker, wired to Bedrock
+localagent goose-setup   # renders the Goose config + preference link
+localagent doctor        # must be ALL green — it does a real Bedrock
+                         #   round trip, so green means working
+```
+
+**6. See it run** on a bundled sample (a tiny repo with failing tests):
+
+```bash
+localagent demo-repo textstats demo1   # prints the exact run command
+cd demo1 && uv run --with pytest pytest -q     # failing — the starting state
+# now run the printed `goose run ...` command and watch the loop:
+# memory read → plan → delegate → diff → tests pass → playbook saved
+cat ~/.local/share/agent-memory/INDEX.md       # what it learned
+
+localagent demo-repo csvstats demo2    # second sample, same task category —
+                                       # this run reuses the learned playbook
+```
+
+Day-to-day use: `goose session` (interactive, all extensions loaded), or
+`goose run --recipe ~/.config/local-coding-agent/plan-and-delegate.yaml
+--params task='...' --params repo_path=/path/to/repo` for one-shot tasks.
+Copy `templates/goosehints` and `templates/AGENTS.md` into each work repo
+and fill them in (build commands, conventions).
 
 ## Layout
 
 | Path | What |
 |---|---|
+| `openhands-coder/` | The Python package: `localagent` CLI, the OpenHands MCP wrapper (`delegate_coding_task`), curated-memory MCP server, audit log |
 | `memory/` | docker-compose for the shared memory stack (OpenMemory MCP + Qdrant + UI) |
-| `openhands-coder/` | Python MCP server wrapping an OpenHands SDK agent as `delegate_coding_task` |
-| `goose/config-template.yaml` | Goose provider + extensions config, rendered from `.env` |
-| `goose/recipes/plan-and-delegate.yaml` | Orchestrator loop with the playbook flywheel (orient → recall → plan → delegate → review → learn) |
-| `prefs/preferences.md` | Standing user preferences — symlinked as Goose's global hints AND injected into every delegated task (deterministic, never retrieved) |
-| `templates/` | `.goosehints` + `AGENTS.md` starters — copy into each work repo (the CLAUDE.md pattern) |
-| `scripts/` | setup + smoke-test scripts |
+| `goose/` | Goose config template + the plan-and-delegate recipe |
+| `prefs/preferences.md` | Standing user preferences — loaded into every session of both agents |
+| `templates/` | `.goosehints` + `AGENTS.md` starters for work repos |
+| `scripts/` | macOS/Linux setup + smoke-test scripts |
 | `.env.example` | every environment-specific value; nothing is hardcoded |
-| `docs/SETUP_FRESH_MACHINE.md` | full command list for a clean macOS/Linux machine |
-| `docs/BEDROCK_INTEGRATION.md` | planner/implementer on Bedrock or any OpenAI-compatible API (incl. the structured-tool-call verification curl) |
-| `docs/DEMO.md` | scripted tour of everything working today |
+| `docs/` | full documentation (below) |
 
-## Install as a package (end users)
+## Documentation
 
-```bash
-uv tool install local-coding-agent   # or pipx install (from PyPI once published;
-                                     #  until then: uv tool install -e ./openhands-coder)
-localagent init          # configs -> ~/.config/local-coding-agent + dependency check
-localagent up            # memory stack + local model servers (downloads models first run)
-localagent goose-setup   # renders ~/.config/goose/config.yaml + preference link
-localagent doctor        # health-check everything
-goose session            # go
-```
+- `docs/OVERVIEW.md` — architecture diagram, component breakdown, and what
+  makes this different from hosted coding assistants
+- `docs/SETUP_FRESH_MACHINE.md` — detailed setup for macOS / Linux / Windows
+- `docs/WINDOWS_VM.md` — step-by-step Windows run-sheet with troubleshooting
+- `docs/BEDROCK_INTEGRATION.md` — credentials, model choices, optional private
+  VPC connectivity, and how to point at any OpenAI-compatible endpoint instead
+- `docs/DEMO.md` — a scripted tour of every working capability
+- `docs/FINDINGS.md` — the research behind the architecture choices
+- `docs/IMPLEMENTATION_STEPS.md` — the original build plan
+- `docs/IMPLEMENTED.md` — dated record of what was built and verified
 
-Host prerequisites the CLI checks for: Docker, `brew install llama.cpp
-block-goose-cli`, uv. Services run in Docker; agents and inference run on the
-host (Docker on macOS has no Metal passthrough — containerizing inference
-would make it several times slower).
+## Memory model (two layers)
 
-## Setup (dev machine, repo checkout)
-
-Prereqs: Docker, Homebrew, `uv`.
-
-```bash
-brew install llama.cpp block-goose-cli
-cp .env.example .env            # edit for your environment
-./scripts/memory-up.sh          # local llama servers + gateway + qdrant +
-                                #   OpenMemory MCP (all localhost-only;
-                                #   models auto-download on first run)
-cd openhands-coder && uv sync && uv run pytest && cd ..   # implementer wrapper
-./scripts/goose-setup.sh        # renders ~/.config/goose/config.yaml
-./scripts/smoke-test.sh         # end-to-end checks (no LLM calls)
-```
-
-Memory backend detail: mem0 (inside OpenMemory) needs an extraction LLM and
-an embedder. Both run locally via llama.cpp (`scripts/local-llm-up.sh`:
-nomic-embed on :8081, Qwen2.5-3B on :8082) behind a LiteLLM gateway on :4000.
-We use llama.cpp rather than Ollama because the Ollama app binary hangs on
-managed Macs and the brew formula shipped without its runner binary; llama.cpp
-also matches the company-side architecture (OpenAI-compatible servers behind
-a gateway). Note the gateway aliases the embedder as `text-embedding-3-small`
-— see the comment in `gateway/litellm.yaml`.
-
-Use it:
-
-```bash
-goose session                   # interactive, both extensions loaded
-goose run --recipe goose/recipes/plan-and-delegate.yaml \
-  --params task='add a --verbose flag' repo_path=/path/to/repo
-```
-
-## What still needs the company environment
-
-These are intentionally left as `.env` values (see `IMPLEMENTATION_STEPS.md`
-Phases 1–2 and 7):
-
-1. **Bedrock planner** — AWS credentials/profile + PrivateLink VPC endpoint
-   with the scoped (`InvokeModel`-only) endpoint policy. Until then, point
-   `GOOSE_PROVIDER` at any OpenAI-compatible endpoint for dev.
-2. **Local implementer model** — the vLLM box serving Qwen3-Coder
-   (`--tool-call-parser qwen3_coder` is mandatory) behind an authenticating
-   reverse proxy; set `OPENHANDS_LLM_*` to it. For laptop dev, llama.cpp or
-   LM Studio with a small coder model works.
-3. **Company repos / data** — nothing in this repo touches them; index and
-   audit-log wiring happens on the inside.
-
-## Memory model (two layers, mirrors Claude Code)
-
-1. **Curated notes** (`memory-direct` extension): verbatim markdown files +
-   `INDEX.md` under `MEMORY_NOTES_DIR`, written deliberately by the planner
-   via `save_note` and read via `get_memory_index`/`read_note` at session
-   start. Preferences, project decisions, playbooks, escalations live here —
-   exact wording preserved, human-reviewable, shared by both agents.
+1. **Curated notes** (`memory-direct`): verbatim markdown files + `INDEX.md`
+   under `MEMORY_NOTES_DIR`, written deliberately via `save_note` and read at
+   session start. Preferences, decisions, playbooks, escalations — exact
+   wording preserved, human-reviewable, git-versioned on every change.
 2. **Episodic recall** (OpenMemory + Qdrant): semantic search over extracted
    fragments — the supplemental long tail, not the source of truth.
 
-Standing preferences skip memory entirely: `prefs/preferences.md` is loaded
-deterministically every session (Goose global hints + wrapper prompt
-injection). Note: OpenMemory's `infer:false` raw mode silently stores nothing
-in the shipped image — that's why curated notes are files, not vectors.
+Standing preferences skip retrieval entirely: `prefs/preferences.md` is
+loaded deterministically every session for both agents.
 
-## Security notes (enterprise posture)
+## Privacy & safety properties
 
-- Memory stack binds to `127.0.0.1` only; memories never leave the machine
-  (Ollama does extraction/embeddings locally).
-- The implementer's iteration ceiling (`OPENHANDS_MAX_ITERATIONS`) is the
-  cost/runaway guard; the recipe escalates after two failed delegations and
-  records the escalation in memory (the routing flywheel's training data).
-- Recalled memory is treated as information, not instructions (prompt-
-  injection hygiene, FINDINGS §7); don't store raw third-party text.
-- For tasks ingesting untrusted content, run the implementer in OpenHands'
+- All inference goes to AWS Bedrock under your own account and credentials;
+  memory storage, audit logs, and orchestration state stay on your machine.
+  The memory stack binds to `127.0.0.1` only.
+- The implementer has a hard iteration ceiling (`OPENHANDS_MAX_ITERATIONS`)
+  as a cost/runaway guard; the recipe escalates after two failed delegations
+  and records why.
+- Recalled memory is treated as information, not instructions; raw
+  third-party text is never stored as memory.
+- For tasks that ingest untrusted content, run the implementer in OpenHands'
   Docker sandbox (SDK workspace option) — local exec is for trusted repos.

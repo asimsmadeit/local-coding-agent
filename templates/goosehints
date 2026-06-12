@@ -1,6 +1,6 @@
 # Project hints for Goose — copy this file to the ROOT of each work repo as
 # `.goosehints` and fill it in. Goose auto-loads it every session in that
-# repo (the CLAUDE.md pattern: deterministic, never retrieved).
+# repo (deterministic — loaded every time, never retrieved).
 
 ## What this repo is
 <one paragraph: purpose, main language/framework, entry points>

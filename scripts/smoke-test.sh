@@ -23,10 +23,17 @@ else
   bad "SSE endpoint failed: $SSE_URL"
 fi
 
-echo "[3/5] local model servers (memory backend)"
-if curl -sf -m 2 -o /dev/null http://localhost:8081/health; then ok "embedder on :8081"; else bad "embedder down (./scripts/local-llm-up.sh)"; fi
-if curl -sf -m 2 -o /dev/null http://localhost:8082/health; then ok "extraction LLM on :8082"; else bad "extraction LLM down (./scripts/local-llm-up.sh)"; fi
-if curl -sf -m 2 -o /dev/null http://localhost:4000/health/liveliness; then ok "LiteLLM gateway on :4000"; else bad "gateway down (./scripts/local-llm-up.sh)"; fi
+echo "[3/5] Bedrock access (memory backend)"
+if [[ -n "${AWS_ACCESS_KEY_ID:-}" || -f "$HOME/.aws/credentials" || -f "$HOME/.aws/config" ]]; then
+  ok "AWS credentials present (env or ~/.aws)"
+else
+  bad "no AWS credentials — run: aws configure (or aws sso login)"
+fi
+if command -v aws >/dev/null && aws sts get-caller-identity --output text --query Account >/dev/null 2>&1; then
+  ok "AWS credentials valid (sts get-caller-identity)"
+else
+  echo "  - skipped live credential check (aws CLI missing or creds invalid)"
+fi
 if curl -sf -m 60 http://localhost:8765/api/v1/memories/ -X POST -H 'Content-Type: application/json' \
    -d "{\"user_id\":\"${MEMORY_USER_ID:-default}\",\"text\":\"smoke test: user likes green\",\"app\":\"smoketest\",\"infer\":true}" \
    | grep -qv '"error"'; then ok "end-to-end memory write"; else bad "memory write failed (docker logs memory-openmemory-mcp-1)"; fi

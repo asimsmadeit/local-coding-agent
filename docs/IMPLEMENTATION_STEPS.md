@@ -2,6 +2,14 @@
 
 Companion to `FINDINGS.md` (read that first — it explains *why* behind every choice here).
 
+> **SUPERSEDED IN PART (2026-06-12):** the constraint set changed — no local
+> compute/GPU is available, and Windows support is required. ALL model
+> hosting below (vLLM box, llama.cpp dev tier, local condenser, Ollama
+> embeddings) is replaced by AWS Bedrock (Claude / Nova / Titan embeddings).
+> The orchestration, memory, sandboxing, and flywheel phases stand. See
+> `IMPLEMENTED.md` §16 and `BEDROCK_INTEGRATION.md` for the current
+> model wiring; this document is kept as the original plan of record.
+
 **Architecture being built (revised from original idea):**
 
 ```
@@ -103,7 +111,7 @@ Do NOT build two peer agents handing off mid-task — see FINDINGS §1.
 - [ ] **4.5.3** Promotion gate (outcome-gated memory): a playbook stays `draft` until the local model executes it successfully once (tests pass / diff accepted) → `trusted`. Two consecutive failures → `retired`, and the failure context becomes input to a revision request on the next Claude call.
 - [ ] **4.5.4** Router change (extends 3.5): before escalating to Bedrock, retrieve playbooks by task category/similarity. Escalate only on retrieval miss **or** playbook failure. Every escalation is by definition a future playbook candidate — the flywheel closes itself.
 - [ ] **4.5.5** Instrument the **frontier-call decay curve**: per task category, log `frontier_tokens / total_tokens` and resolve rate, weekly. This is the headline metric (dashboard in 9.3). Success looks like the frontier share declining at constant resolve rate.
-- [ ] **4.5.6** Review loop: playbooks are human-readable markdown — skim the library weekly, correct or delete bad entries. Auditability is the enterprise selling point; keep the library small and curated rather than large and stale.
+- [ ] **4.5.6** Review loop: playbooks are human-readable markdown — skim the library weekly, correct or delete bad entries. Auditability is the point; keep the library small and curated rather than large and stale.
 - [ ] **4.5.7** Legal note: persistent reuse of Claude outputs as context is ordinary usage (materially different from the prohibited weight training), but if this ships beyond personal/team use, have whoever reviews vendor agreements glance at it.
 
 ## Phase 5 — Codebase knowledge layer (1–2 days)

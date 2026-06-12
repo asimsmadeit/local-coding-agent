@@ -10,8 +10,6 @@ if [[ ! -f .env ]]; then
 fi
 set -a; source .env; set +a
 export PROJECT_ROOT
-# Derived: host-only form of the local LLM URL for Goose's openai provider.
-export LOCAL_LLM_BASE_URL_HOST="${LOCAL_LLM_BASE_URL%/v1}"
 
 CONFIG_DIR="$HOME/.config/goose"
 mkdir -p "$CONFIG_DIR"
@@ -30,7 +28,7 @@ uv tool install -q -e "$PROJECT_ROOT/openhands-coder" --force
 export CODER_BIN_DIR="$(dirname "$(readlink -f "$(command -v openhands-coder 2>/dev/null || echo "$HOME/.local/bin/openhands-coder")")")"
 [[ -x "$CODER_BIN_DIR/openhands-coder" ]] || CODER_BIN_DIR="$HOME/.local/bin"
 
-envsubst '${GOOSE_PLANNER_MODEL} ${LOCAL_LLM_MODEL} ${LOCAL_LLM_BASE_URL_HOST}
+envsubst '${GOOSE_PLANNER_MODEL}
 ${OPENMEMORY_MCP_URL} ${MEMORY_USER_ID} ${MEMORY_NOTES_DIR} ${PROJECT_ROOT}
 ${OPENHANDS_LLM_MODEL} ${OPENHANDS_LLM_BASE_URL} ${OPENHANDS_LLM_API_KEY}
 ${OPENHANDS_MAX_ITERATIONS} ${CODER_BIN_DIR}' \

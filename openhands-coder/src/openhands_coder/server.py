@@ -1,6 +1,6 @@
 """MCP server wrapping an OpenHands SDK agent as a delegated coding tool.
 
-Shape B integration (see FINDINGS.md §1): the orchestrator (Goose) hands this
+Shape B integration (see docs/FINDINGS.md §1): the orchestrator (Goose) hands this
 server a complete, self-contained task spec and gets back a structured result.
 The interface is deliberately task-shaped — full spec in, diff + summary out —
 never conversational, because mid-task conversational handoffs between agents
@@ -56,8 +56,8 @@ def _memory_mcp_config(client_name: str) -> dict:
 
 def _standing_context(repo_path: str) -> str:
     """Deterministically loaded context: standing user preferences (global)
-    plus the repo's AGENTS.md conventions, if present. Mirrors Claude Code's
-    CLAUDE.md pattern — injected every task, never retrieved."""
+    plus the repo's AGENTS.md conventions, if present. Injected into every
+    task, never retrieved."""
     sections = []
     prefs_file = _env("PREFERENCES_FILE")
     if prefs_file and os.path.isfile(prefs_file):

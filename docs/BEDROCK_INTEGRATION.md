@@ -1,13 +1,14 @@
-# Bedrock & Remote OpenAI-Compatible API Integration
+# Bedrock Integration
 
-How to run the stack when the locally hosted implementer model is NOT
-available — planner and/or implementer served by AWS Bedrock or any
-OpenAI-compatible endpoint (vLLM box, LiteLLM deployment, llama.cpp on
-another machine, OpenRouter, etc.).
+Bedrock is the DEFAULT and only wired provider for this stack: planner
+(Goose), implementer (OpenHands), and the memory backend (mem0 extraction +
+embeddings) all run on it — there is no local inference and no GPU
+requirement. Section C covers substituting any OpenAI-compatible endpoint
+for the implementer later (e.g. a company vLLM box).
 
-The architecture doesn't change: Goose plans, the OpenHands coder implements,
-both share memory. Only the two LLM "sockets" move. Everything is `.env` +
-one re-render — no code changes.
+The architecture doesn't change across providers: Goose plans, the OpenHands
+coder implements, both share memory. Only the LLM "sockets" move. Everything
+is `.env` + one re-render — no code changes.
 
 ---
 
@@ -20,7 +21,7 @@ Goose has a native Bedrock provider using the standard AWS credential chain.
 ```bash
 # Model access: AWS console → Bedrock → Model access → enable Claude models.
 
-# Private connectivity (enterprise requirement — no public internet path):
+# Private connectivity (optional hardening — no public internet path):
 aws ec2 create-vpc-endpoint \
   --vpc-id <vpc-id> \
   --service-name com.amazonaws.<region>.bedrock-runtime \
@@ -67,23 +68,42 @@ In `goose/config-template.yaml`: the Bedrock block is already the default
 goose session                # planner now runs on Bedrock
 ```
 
-## B. Implementer on Bedrock (OpenHands coder)
+## B. Implementer on Bedrock (OpenHands coder) — the default
 
 The wrapper speaks LiteLLM model strings, so Bedrock works directly:
 
 ```bash
-# .env
+# .env (this is the shipped default)
 OPENHANDS_LLM_MODEL=bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
 OPENHANDS_LLM_BASE_URL=          # EMPTY — boto3 credential chain is used
 OPENHANDS_LLM_API_KEY=           # EMPTY
 ```
 
-Re-run `./scripts/goose-setup.sh` (the wrapper gets its env from the Goose
-extension config). AWS credentials/region come from the environment.
+Cheaper alternative: `bedrock/us.amazon.nova-pro-v1:0` (Nova supports
+structured tool calling; quality is below Claude on hard tasks — the
+escalation path in the recipe covers the gap).
 
-Use this mode while the company vLLM box doesn't exist yet: planner AND
-implementer both on Bedrock — full functionality, higher cost; the routing
-flywheel (playbooks, escalation tracking) still accumulates data.
+Re-run `./scripts/goose-setup.sh` / `localagent goose-setup` (the wrapper
+gets its env from the Goose extension config). AWS credentials/region come
+from the environment.
+
+## B2. Memory backend on Bedrock (mem0)
+
+mem0 (inside the OpenMemory container) needs an extraction LLM + embedder.
+Defaults (set in `.env`, pinned via the OpenMemory config API by
+`memory-up` / `localagent up`):
+
+```bash
+MEMORY_LLM_MODEL=us.amazon.nova-lite-v1:0        # cheap, high-volume calls
+MEMORY_EMBEDDER_MODEL=amazon.titan-embed-text-v2:0
+MEMORY_EMBEDDING_DIMS=1024                       # Titan v2 native dims
+```
+
+The container reads credentials from the host's `~/.aws` (mounted read-only
+in `memory/docker-compose.yml`) or static `AWS_*` keys passed through from
+`.env`. Enable Nova + Titan in Bedrock → Model access alongside Claude.
+If you change `MEMORY_EMBEDDING_DIMS` after first run, delete the qdrant
+collection (`memory/data/qdrant`) — vectors of different dims can't mix.
 
 ## C. Implementer on any OpenAI-compatible endpoint
 
@@ -142,9 +162,10 @@ vLLM `--max-model-len 32768`+). An 8k window fails immediately — observed.
 
 ## D. What stays local regardless
 
-Memory (notes + episodic), the gateway, audit logs, and all orchestration
-state never leave the machine in any of the modes above. Bedrock/private
-endpoints see only the prompts you route to them. The memory stack's own
-extraction/embedding models are local — remote planner does NOT mean remote
-memory: if the local memory backend can't run, memory writes fail safe
-(curated notes still work — they're plain files, no LLM needed to write).
+Memory STORAGE (curated notes + episodic vectors in Qdrant), audit logs, and
+all orchestration state never leave the machine. Bedrock sees only the
+prompts routed to it: planner/implementer turns, and the memory extraction/
+embedding calls (snippets of agent conversations — same data class as the
+planner traffic, same account controls). If Bedrock is unreachable, episodic
+memory writes fail safe; curated notes still work — they're plain files, no
+LLM needed to write them.

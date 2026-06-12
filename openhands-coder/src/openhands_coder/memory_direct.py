@@ -3,10 +3,10 @@
 Why files, not the vector store: OpenMemory's write path routes everything
 through mem0's extraction LLM (lossy — it dropped half of a two-part
 preference in testing), and its `infer: false` raw mode silently stores
-nothing in the shipped image. More importantly, Claude Code's memory model —
-the thing this stack is mimicking — IS files: one note per fact, an index
-loaded deterministically each session, content written verbatim by the model
-that authored it. This server reproduces that for both agents.
+nothing in the shipped image. Plain files keep knowledge exact: one note per
+fact, an index loaded deterministically each session, content written
+verbatim by the model that authored it — and humans can read, edit, or
+delete anything the agents have learned.
 
 Layout under MEMORY_NOTES_DIR:
     INDEX.md                       one line per note — read this every session

@@ -1,4 +1,4 @@
-"""Append-only JSONL audit log — the enterprise compliance artifact.
+"""Append-only JSONL audit log — the compliance artifact.
 
 Every consequential agent action gets one line: timestamps, content hashes
 (not raw content — the log must be safe to ship to a SIEM without leaking
