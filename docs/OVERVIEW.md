@@ -13,7 +13,10 @@ starts with that knowledge already loaded.
 
 All model calls go to AWS Bedrock under **your own AWS account**. Your code
 and prompts never touch any other company's service. There is no local GPU,
-no model hosting, nothing to babysit: two small Docker containers and a CLI.
+no model hosting, **no containers, and nothing to download at runtime** —
+both memory layers run in-process inside the CLI's package. It runs on a
+plain VM with no Docker; the whole footprint is `uv tool install`, `aws
+configure`, and the Goose binary.
 
 ## Architecture
 
@@ -26,13 +29,13 @@ flowchart TD
     G <-->|read / write| M
     OH <-->|read / write| M
 
-    subgraph M["Shared persistent memory (MCP)"]
+    subgraph M["Shared persistent memory (MCP, in-process)"]
         direction LR
         CN["Curated notes\nmarkdown + INDEX.md\n(playbooks, preferences,\ndecisions — git-versioned)"]
-        EP["Episodic recall\nOpenMemory + Qdrant\n(semantic search)"]
+        EP["Episodic recall\nlocal SQLite vectors\n(semantic search,\nno containers)"]
     end
 
-    EP -->|"extraction: Nova Lite\nembeddings: Titan v2"| B[(AWS Bedrock\nyour account)]
+    EP -->|"embeddings: Titan v2"| B[(AWS Bedrock\nyour account)]
     G --> B
     OH --> B
 
@@ -54,7 +57,7 @@ returns a structured diff) → **REVIEW** (verify, retry or escalate) →
 | `localagent` CLI | One-command lifecycle on macOS/Linux/Windows: `init` (configs + dependency check), `up` (memory stack), `goose-setup` (renders orchestrator config), `doctor` (end-to-end health check incl. a real Bedrock round trip), `report` (learning metrics), `demo-repo` (sample task repos), `autostart` |
 | Delegation wrapper | OpenHands agent exposed as one MCP tool, `delegate_coding_task` — spec in, diff + summary out; flags empty diffs (a model claiming success without changes); hard iteration ceiling |
 | Curated memory server | `save_note` / `read_note` / `get_memory_index` / `delete_note` over plain markdown files; every change git-committed automatically — full history of everything the agents have learned, instant rollback |
-| Episodic memory stack | OpenMemory (mem0) + Qdrant in Docker, extraction and embeddings on Bedrock, browsable web UI at `localhost:3000` |
+| Episodic memory | In-process semantic recall (`memory_episodic`): Bedrock Titan embeddings + a local SQLite vector store, brute-force cosine. No containers, no Qdrant, no extraction LLM — fragments are stored verbatim |
 | Playbook flywheel | The orchestrator recipe writes a generalized playbook after novel tasks and passes matching playbooks into later delegations; playbooks are promoted (draft → trusted) or retired based on outcomes |
 | Standing preferences | One file, injected into every session of *both* agents deterministically — never lost, never dependent on retrieval |
 | Audit log | Append-only JSONL of every task and memory write — timestamps, content hashes (safe to ship to log systems without leaking source), durations, outcomes |
@@ -94,8 +97,9 @@ This project occupies the spot neither of them covers:
    gets, the less frontier-model time each task needs.
 5. **One trust boundary.** Everything model-shaped happens in your AWS
    account under your IAM controls and Bedrock's no-training-on-customer-
-   content terms; everything stateful stays on your machine, bound to
-   localhost. For teams whose code cannot leave their boundary, this is the
+   content terms; everything stateful stays on your machine as plain files
+   (markdown notes + a local SQLite vector DB) — nothing even listens on a
+   port. For teams whose code cannot leave their boundary, this is the
    difference between "can't use AI coding tools" and "can."
 
 ## The need it fills

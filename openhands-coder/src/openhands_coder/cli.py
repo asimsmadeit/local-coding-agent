@@ -2,31 +2,30 @@
 
 Install:  pipx install local-coding-agent   (or: uv tool install local-coding-agent)
 Then:     localagent init      materialize configs into ~/.config/local-coding-agent
-          localagent up        start the memory stack (docker)
+          localagent up        provision memory dirs + prove Bedrock embeddings work
           localagent goose-setup   render ~/.config/goose/config.yaml
           localagent doctor    health-check everything
-          localagent down      stop services
+          localagent down      (no-op: memory runs in-process)
 
-Design: the pip package is the front door; the memory stack runs in Docker;
-ALL models run on AWS Bedrock (Claude / Nova) — no local inference, no GPU.
-Native pieces (goose, docker) are host installs this CLI checks for and
-explains. Cross-platform: macOS, Linux, and Windows.
+Design: the pip package is the front door. There are NO containers and
+nothing to download at runtime — both memory layers (curated notes +
+episodic semantic recall) run in-process as stdio MCP servers, and ALL
+inference + embeddings run on AWS Bedrock (Claude / Nova / Titan), so there
+is no local inference and no GPU. The only host installs this CLI checks for
+are goose, uv, and the AWS CLI. Cross-platform: macOS, Linux, and Windows —
+runs on a plain VM with no container runtime.
 
 Everything operates on a home dir (default ~/.config/local-coding-agent,
-override with LCA_HOME) holding .env, docker-compose.yml, goose templates,
-and service logs. Stdlib only.
+override with LCA_HOME) holding .env and the goose templates. Stdlib only.
 """
 
 import argparse
 import importlib.resources
-import json
 import os
 import shutil
 import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 
 # ── plumbing ──────────────────────────────────────────────────────────
 
@@ -61,24 +60,6 @@ def load_env(home: str) -> dict:
     return env
 
 
-def _http(url: str, method: str = "GET", body: dict | None = None, timeout: int = 5):
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode() if body is not None else None,
-        headers={"Content-Type": "application/json"},
-        method=method,
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.status, resp.read().decode()
-
-
-def _up(url: str, timeout: int = 2) -> bool:
-    try:
-        return _http(url, timeout=timeout)[0] == 200
-    except (urllib.error.URLError, OSError):
-        return False
-
-
 def _ok(msg: str) -> None:
     print(f"  ✓ {msg}")
 
@@ -109,8 +90,6 @@ def cmd_init(_args) -> int:
     os.makedirs(home, exist_ok=True)
     assets = _assets()
     materialize = {
-        "docker-compose.yml": "docker-compose.yml",
-        "openmemory-bedrock.Dockerfile": "openmemory-bedrock.Dockerfile",
         "config-template.yaml": "goose-config-template.yaml",
         "plan-and-delegate.yaml": "plan-and-delegate.yaml",
     }
@@ -134,12 +113,13 @@ def cmd_init(_args) -> int:
 
     print(f"Initialized {home}")
     print("\nDependency check:")
+    # No Docker, no container runtime, nothing to download at runtime: both
+    # memory layers run in-process inside this package. Inference is on Bedrock.
     deps = {
-        "docker": "Docker Desktop (memory stack; works on macOS/Linux/Windows)",
         "goose": "brew install block-goose-cli, or the Windows release from "
                  "github.com/block/goose (orchestrator)",
-        "uvx": "https://docs.astral.sh/uv/getting-started/installation/ "
-               "(runs the OpenMemory MCP bridge)",
+        "uv": "https://docs.astral.sh/uv/getting-started/installation/ "
+              "(installs this CLI; runs the demo tests)",
         "aws": "AWS CLI — needed once for `aws configure` (Bedrock "
                "credentials); installers at aws.amazon.com/cli",
     }
@@ -155,69 +135,54 @@ def cmd_init(_args) -> int:
 
 
 def cmd_up(_args) -> int:
+    """There are no services to start — both memory layers run in-process
+    (stdio MCP servers launched on demand by Goose / the coder), and all
+    inference is on Bedrock. `up` therefore just provisions the memory
+    directories and proves the Bedrock embedding path works end to end, so a
+    green `up` means episodic memory will actually store and recall."""
     home = home_dir()
     env = load_env(home)
     if not env:
         print(f"No .env in {home} — run: localagent init", file=sys.stderr)
         return 1
 
-    # 1. memory stack containers (the only services — all inference is
-    #    on Bedrock, so there is nothing to run on the host). The compose
-    #    file mounts ~/.aws read-only; make sure it exists so the bind
-    #    mount can't fail on a machine that hasn't run `aws configure` yet.
-    os.makedirs(os.path.join(os.path.expanduser("~"), ".aws"), exist_ok=True)
-    subprocess.run(
-        ["docker", "compose", "-f", os.path.join(home, "docker-compose.yml"),
-         "--env-file", os.path.join(home, ".env"), "up", "-d", "--build"],
-        check=True,
-    )
+    notes = env.get("MEMORY_NOTES_DIR") or os.path.join(
+        os.path.expanduser("~"), ".local", "share", "agent-memory")
+    episodic = env.get("MEMORY_EPISODIC_DIR") or os.path.join(
+        os.path.expanduser("~"), ".local", "share", "agent-episodic")
+    for d in (notes, episodic):
+        os.makedirs(d, exist_ok=True)
 
-    # 2. wait for the API, then pin mem0's LLM + embedder to Bedrock (the
-    #    image persists this in its DB; env vars alone don't switch it)
-    print("waiting for services", end="", flush=True)
-    deadline = time.time() + 300
-    while time.time() < deadline:
-        if _up("http://localhost:8765/docs"):
-            break
-        print(".", end="", flush=True)
-        time.sleep(5)
-    else:
-        print("\nTIMED OUT — check: docker compose logs openmemory-mcp")
+    # Real Bedrock embedding round trip — the only thing that can fail here is
+    # credentials / model access / region, and we want that surfaced now.
+    for key in ("AWS_REGION", "AWS_PROFILE", "MEMORY_EMBEDDER_MODEL",
+                "MEMORY_EMBEDDING_DIMS", "MEMORY_USER_ID"):
+        if env.get(key):
+            os.environ[key] = env[key]
+    os.environ["MEMORY_EPISODIC_DIR"] = episodic
+    print("checking Bedrock embeddings (Titan round trip) ... ", end="", flush=True)
+    try:
+        from . import memory_episodic
+        vec = memory_episodic._embed("localagent up: connectivity probe")
+        print(f"ok ({len(vec)}-dim)")
+    except Exception as exc:
+        print("FAILED")
+        print(f"  {type(exc).__name__}: {exc}", file=sys.stderr)
+        print("  fix: `aws configure` (default profile) + enable "
+              f"{env.get('MEMORY_EMBEDDER_MODEL') or 'amazon.titan-embed-text-v2:0'} "
+              "in Bedrock → Model access", file=sys.stderr)
         return 1
-    print(" ready")
 
-    dims = int(env.get("MEMORY_EMBEDDING_DIMS") or 1024)
-    for section, config in {
-        "llm": {"model": env.get("MEMORY_LLM_MODEL") or "us.amazon.nova-lite-v1:0",
-                "temperature": 0.1, "max_tokens": 2000},
-        "embedder": {"model": (env.get("MEMORY_EMBEDDER_MODEL")
-                               or "amazon.titan-embed-text-v2:0"),
-                     "embedding_dims": dims},
-    }.items():
-        _, body = _http(f"http://localhost:8765/api/v1/config/mem0/{section}",
-                        "PUT", {"provider": "aws_bedrock", "config": config})
-        if '"detail"' in body:
-            print(f"FAILED to pin mem0 {section} config: {body}", file=sys.stderr)
-            return 1
-    if not _up("http://localhost:6333/collections/openmemory"):
-        _http("http://localhost:6333/collections/openmemory", "PUT",
-              {"vectors": {"size": dims, "distance": "Cosine"}})
-        print(f"pre-created qdrant collection ({dims}-dim)")
-
-    user = env.get("MEMORY_USER_ID", "default")
-    print(f"\nMemory stack ready. MCP: http://localhost:8765/mcp/<client>/sse/{user}")
-    print("UI: http://localhost:3000   Next: localagent goose-setup")
+    print(f"\nMemory ready (in-process, no containers).")
+    print(f"  curated notes : {notes}")
+    print(f"  episodic db   : {os.path.join(episodic, 'episodic.db')}")
+    print("Next: localagent goose-setup")
     return 0
 
 
 def cmd_down(_args) -> int:
-    home = home_dir()
-    subprocess.run(
-        ["docker", "compose", "-f", os.path.join(home, "docker-compose.yml"),
-         "--env-file", os.path.join(home, ".env"), "down"],
-        check=False,
-    )
-    print("stopped")
+    print("nothing to stop — memory runs in-process (no services). "
+          "Stop a `goose session` to release its MCP servers.")
     return 0
 
 
@@ -230,6 +195,16 @@ def cmd_goose_setup(_args) -> int:
     if not env.get("MEMORY_NOTES_DIR"):  # absent OR left empty in .env
         env["MEMORY_NOTES_DIR"] = os.path.join(
             os.path.expanduser("~"), ".local", "share", "agent-memory")
+    if not env.get("MEMORY_EPISODIC_DIR"):
+        env["MEMORY_EPISODIC_DIR"] = os.path.join(
+            os.path.expanduser("~"), ".local", "share", "agent-episodic")
+    # Embedder defaults so the template never renders a literal ${...} when a
+    # user blanks these in .env (the episodic server expects concrete values).
+    for key, default in (("MEMORY_EMBEDDER_MODEL", "amazon.titan-embed-text-v2:0"),
+                         ("MEMORY_EMBEDDING_DIMS", "1024"),
+                         ("AWS_REGION", "us-east-1")):
+        if not env.get(key):
+            env[key] = default
     env["PROJECT_ROOT"] = home
     env["CODER_BIN_DIR"] = _bin_dir()
     env["PREFERENCES_FILE"] = os.path.join(home, "preferences.md")
@@ -285,11 +260,7 @@ def cmd_doctor(_args) -> int:
             _bad(label + (f" — {hint}" if hint else ""))
             failures += 1
 
-    print("[1/4] services")
-    ps = subprocess.run(["docker", "ps", "--format", "{{.Names}}"],
-                        capture_output=True, text=True, check=False).stdout
-    check("qdrant container", "mem0_store" in ps, "localagent up")
-    check("openmemory container", "openmemory-mcp" in ps, "localagent up")
+    print("[1/4] credentials")
     aws_dir = os.path.join(os.path.expanduser("~"), ".aws")
     has_creds = bool(os.environ.get("AWS_ACCESS_KEY_ID")) or any(
         os.path.isfile(os.path.join(aws_dir, f)) for f in ("credentials", "config")
@@ -297,29 +268,34 @@ def cmd_doctor(_args) -> int:
     check("AWS credentials (Bedrock)", has_creds,
           "aws configure (or aws sso login)")
 
-    print("[2/4] memory write+recall (end to end)")
+    print("[2/4] episodic memory write+recall (end to end, in-process)")
+    # No containers: exercise the real Bedrock-backed embed → store → search
+    # path directly. This is the honest check — green means recall works.
+    for key in ("AWS_REGION", "AWS_PROFILE", "MEMORY_EMBEDDER_MODEL",
+                "MEMORY_EMBEDDING_DIMS"):
+        if env.get(key):
+            os.environ[key] = env[key]
+    os.environ["MEMORY_USER_ID"] = "doctor"
+    os.environ["MEMORY_EPISODIC_DIR"] = os.path.join(
+        env.get("MEMORY_EPISODIC_DIR") or os.path.join(
+            os.path.expanduser("~"), ".local", "share", "agent-episodic"),
+        "doctor-selftest")
     try:
-        status, body = _http(
-            "http://localhost:8765/api/v1/memories/", "POST",
-            {"user_id": user, "text": "doctor check: user likes green tea",
-             "app": "doctor", "infer": True}, timeout=120)
-        # The API can answer 200 with {"error": ...} — read the body, not
-        # just the status, or this check lies on machines without Bedrock
-        # credentials (observed live).
-        error = ""
-        if status == 200:
-            try:
-                error = str(json.loads(body).get("error") or "")
-            except (json.JSONDecodeError, AttributeError):
-                error = ""
-        check("episodic memory write (Bedrock round trip)",
-              status == 200 and not error, error or f"HTTP {status}")
-    except (urllib.error.URLError, OSError) as exc:
-        check("episodic memory write (Bedrock round trip)", False, str(exc))
+        from . import memory_episodic
+        memory_episodic._add("doctor check: the user prefers green tea")
+        hits = memory_episodic._search("favourite beverage", limit=1)
+        err = hits.get("error")
+        got = (hits.get("results") or [{}])[0].get("memory", "")
+        check("Bedrock embed → store → semantic recall",
+              not err and "green tea" in got, err or "no result returned")
+    except Exception as exc:
+        check("Bedrock embed → store → semantic recall", False,
+              f"{type(exc).__name__}: {exc}")
 
     print("[3/4] agent components")
     check("openhands-coder on PATH", os.path.isfile(_script_path("openhands-coder")))
     check("memory-direct on PATH", os.path.isfile(_script_path("memory-direct")))
+    check("memory-episodic on PATH", os.path.isfile(_script_path("memory-episodic")))
     check("goose CLI", shutil.which("goose") is not None,
           "brew install block-goose-cli")
 
@@ -328,8 +304,9 @@ def cmd_doctor(_args) -> int:
                                "config.yaml")
     rendered = os.path.isfile(config_path)
     body = open(config_path, encoding="utf-8").read() if rendered else ""
-    check("config rendered with both extensions",
-          "openhands_coder" in body and "memory_direct" in body,
+    check("config rendered with all extensions",
+          all(ext in body for ext in
+              ("openhands_coder", "memory_direct", "memory_episodic")),
           "localagent goose-setup")
 
     print(f"\n{'all good' if not failures else f'{failures} failure(s)'}")
@@ -475,8 +452,8 @@ def main() -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("init", help="materialize configs + check dependencies")
-    sub.add_parser("up", help="start the memory stack (docker)")
-    sub.add_parser("down", help="stop services")
+    sub.add_parser("up", help="provision memory dirs + verify Bedrock embeddings")
+    sub.add_parser("down", help="no-op (memory runs in-process)")
     sub.add_parser("goose-setup", help="render Goose config + link preferences")
     sub.add_parser("doctor", help="health-check the whole setup")
     report = sub.add_parser("report", help="flywheel metrics (escalation/playbook trends)")

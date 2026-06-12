@@ -7,12 +7,19 @@ project decisions, and reusable playbooks that carry across sessions and
 agents. All models run on **AWS Bedrock** (Claude / Nova); nothing is sent to
 any other service, no local inference, no GPU required.
 
+**No containers, nothing to download at runtime.** Both memory layers run
+in-process as stdio MCP servers shipped inside the package — episodic recall
+uses Bedrock Titan embeddings with a local SQLite vector store. It runs on a
+plain VM with no Docker / container runtime: `uv tool install`, `aws
+configure`, and the Goose binary are the whole footprint.
+
 ```
 Goose (orchestrator, planner LLM = Bedrock Claude)
- ├─ extension: openmemory       ──┐  shared persistent memory
- └─ extension: openhands_coder    │  (OpenMemory MCP + Qdrant in Docker;
-      └─ OpenHands SDK agent    ──┘   extraction LLM = Bedrock Nova Lite,
-         (implementer LLM =           embeddings = Bedrock Titan v2)
+ ├─ extension: memory_episodic  ──┐  shared persistent memory (in-process)
+ ├─ extension: memory_direct    ──┤  curated notes = source of truth;
+ └─ extension: openhands_coder    │  episodic recall = Bedrock Titan
+      └─ OpenHands SDK agent    ──┘  embeddings + local SQLite vectors
+         (implementer LLM =          (no Docker, no Qdrant, no mcp-proxy)
           Bedrock Claude or Nova)
 ```
 
@@ -33,10 +40,11 @@ cross-platform entry point; `scripts/*.sh` are macOS/Linux conveniences.
 
 | Tool | macOS | Windows |
 |---|---|---|
-| Docker | `brew install orbstack` or Docker Desktop | Docker Desktop (WSL2) |
 | uv | `curl -LsSf https://astral.sh/uv/install.sh \| sh` | `winget install astral-sh.uv` |
 | AWS CLI | `brew install awscli` | `winget install Amazon.AWSCLI` |
 | Goose | `brew install block-goose-cli` | release from github.com/block/goose |
+
+No Docker, no container runtime, no GPU — the memory stack runs in-process.
 
 **2. Get the project and install the CLI:**
 
@@ -54,8 +62,8 @@ aws configure            # paste your AWS access key / secret / region
 ```
 
 Use the **default** profile. In the AWS console under **Bedrock → Model
-access**, enable: your two chosen models below, plus `amazon.nova-lite-v1:0`
-and `amazon.titan-embed-text-v2:0` (they power the memory backend).
+access**, enable: your two chosen models below, plus
+`amazon.titan-embed-text-v2:0` (it powers episodic memory's embeddings).
 
 **4. Pick your two models** — edit `~/.config/local-coding-agent/.env`
 (Windows: `%USERPROFILE%\.config\local-coding-agent\.env`):
@@ -71,10 +79,10 @@ prefix. (`bedrock/us.amazon.nova-pro-v1:0` is the budget implementer option.)
 **5. Start it and check everything:**
 
 ```bash
-localagent up            # memory stack in Docker, wired to Bedrock
+localagent up            # provisions memory dirs + proves Bedrock embeddings work
 localagent goose-setup   # renders the Goose config + preference link
-localagent doctor        # must be ALL green — it does a real Bedrock
-                         #   round trip, so green means working
+localagent doctor        # must be ALL green — it does a real Bedrock embed →
+                         #   store → recall, so green means episodic memory works
 ```
 
 **6. See it run** on a bundled sample (a tiny repo with failing tests):
@@ -100,8 +108,7 @@ and fill them in (build commands, conventions).
 
 | Path | What |
 |---|---|
-| `openhands-coder/` | The Python package: `localagent` CLI, the OpenHands MCP wrapper (`delegate_coding_task`), curated-memory MCP server, audit log |
-| `memory/` | docker-compose for the shared memory stack (OpenMemory MCP + Qdrant + UI) |
+| `openhands-coder/` | The Python package: `localagent` CLI, the OpenHands MCP wrapper (`delegate_coding_task`), both memory MCP servers (curated notes + episodic recall), audit log |
 | `goose/` | Goose config template + the plan-and-delegate recipe |
 | `prefs/preferences.md` | Standing user preferences — loaded into every session of both agents |
 | `templates/` | `.goosehints` + `AGENTS.md` starters for work repos |
@@ -130,8 +137,10 @@ and fill them in (build commands, conventions).
    under `MEMORY_NOTES_DIR`, written deliberately via `save_note` and read at
    session start. Preferences, decisions, playbooks, escalations — exact
    wording preserved, human-reviewable, git-versioned on every change.
-2. **Episodic recall** (OpenMemory + Qdrant): semantic search over extracted
-   fragments — the supplemental long tail, not the source of truth.
+2. **Episodic recall** (`memory_episodic`): semantic search over stored
+   fragments — the supplemental long tail, not the source of truth. Runs
+   in-process (no containers): Bedrock Titan embeddings, a local SQLite vector
+   store, brute-force cosine. Stores text verbatim (no lossy extraction LLM).
 
 Standing preferences skip retrieval entirely: `prefs/preferences.md` is
 loaded deterministically every session for both agents.
@@ -139,12 +148,17 @@ loaded deterministically every session for both agents.
 ## Privacy & safety properties
 
 - All inference goes to AWS Bedrock under your own account and credentials;
-  memory storage, audit logs, and orchestration state stay on your machine.
-  The memory stack binds to `127.0.0.1` only.
+  memory storage, audit logs, and orchestration state stay on your machine as
+  plain files (markdown notes + a local SQLite vector DB). Nothing listens on
+  a port — the memory servers are in-process stdio, reachable only by the
+  agents that spawn them.
 - The implementer has a hard iteration ceiling (`OPENHANDS_MAX_ITERATIONS`)
   as a cost/runaway guard; the recipe escalates after two failed delegations
   and records why.
 - Recalled memory is treated as information, not instructions; raw
   third-party text is never stored as memory.
-- For tasks that ingest untrusted content, run the implementer in OpenHands'
-  Docker sandbox (SDK workspace option) — local exec is for trusted repos.
+- The implementer runs in local-exec mode by default (no container needed) —
+  intended for trusted repos. For tasks that ingest untrusted content you can
+  optionally enable OpenHands' Docker sandbox (SDK workspace option); that is
+  the one place Docker buys you something, and it's not required to run the
+  system.

@@ -46,12 +46,14 @@ You ──task──▶ Goose (orchestrator, Bedrock Claude)
               OpenHands (implementer, Bedrock Claude or Nova)
                  │  edits files, runs tests in your repo
                  ▼
-   ┌──────── shared persistent memory (MCP) ────────┐
-   │ curated notes: playbooks, preferences,         │
-   │   decisions — markdown, git-versioned          │
-   │ episodic recall: OpenMemory + Qdrant           │
-   └────────────────────────────────────────────────┘
+   ┌──── shared persistent memory (MCP, in-process) ─┐
+   │ curated notes: playbooks, preferences,          │
+   │   decisions — markdown, git-versioned           │
+   │ episodic recall: Bedrock Titan embeddings       │
+   │   + local SQLite vectors (no containers)        │
+   └─────────────────────────────────────────────────┘
    All inference: YOUR AWS Bedrock account · all state: your machine
+   No Docker, no GPU — runs on a plain VM
    Every action + memory write → append-only hashed audit log
 ```
 
@@ -98,8 +100,8 @@ hashes; every learned playbook is a file you can read, edit, or delete.
 ## Real today · next
 
 **Real:** fresh clone → working agent in ~15 min on Windows/macOS/Linux ·
-21 passing tests · verified Bedrock pipeline · bundled demo repos ·
-append-only audit trail
+no Docker / no GPU — runs on a plain VM · 27 passing tests · verified Bedrock
+pipeline · bundled demo repos · append-only audit trail
 
 **Next:** human approval gate on playbook writes · org-shared memory on a
 shared host · IDE integration via ACP

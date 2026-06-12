@@ -7,12 +7,17 @@ dependencies = [
     "fastmcp>=2.0,<4",
     "openhands-sdk>=1.27.0",
     "openhands-tools>=1.27.0",
+    # Episodic memory runs in-process (no containers): Bedrock Titan
+    # embeddings via boto3, brute-force cosine in NumPy over a local SQLite db.
+    "boto3>=1.34",
+    "numpy>=1.26",
 ]
 
 [project.scripts]
 localagent = "openhands_coder.cli:main"
 openhands-coder = "openhands_coder.server:main"
 memory-direct = "openhands_coder.memory_direct:main"
+memory-episodic = "openhands_coder.memory_episodic:main"
 
 [build-system]
 requires = ["hatchling"]

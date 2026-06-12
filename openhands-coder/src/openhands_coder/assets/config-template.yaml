@@ -1,10 +1,12 @@
 # Goose config template — rendered to ~/.config/goose/config.yaml by
-# scripts/goose-setup.sh, which substitutes ${...} values from the repo .env.
+# `localagent goose-setup` (and scripts/goose-setup.sh), which substitutes
+# ${...} values from the repo .env.
 #
 # Goose is the ORCHESTRATOR (Shape B, docs/FINDINGS.md §1): it plans with the
 # frontier model and delegates self-contained coding tasks to the OpenHands
-# implementer via the openhands_coder MCP extension. Both sides mount the
-# same OpenMemory endpoint → one shared persistent memory.
+# implementer via the openhands_coder MCP extension. Both memory layers run
+# IN-PROCESS as stdio extensions (no containers, no network) — the OpenHands
+# coder mounts the same two servers, so memory is shared.
 
 # ── Planner model ─────────────────────────────────────────────────────
 # Bedrock via the standard AWS credential chain (PrivateLink + scoped
@@ -25,18 +27,27 @@ extensions:
     timeout: 300
     bundled: true
 
-  # ── Shared persistent memory (OpenMemory MCP) ─────────────────────
-  # Goose dropped SSE transport, so we bridge OpenMemory's SSE endpoint
-  # to stdio via mcp-proxy (runs with uvx, no install step).
-  openmemory:
+  # ── Episodic memory (semantic recall) — in-process, no containers ──
+  # Bedrock Titan embeddings + a local SQLite vector store, brute-force
+  # cosine. Tools: add_memories / search_memory / list_memories /
+  # delete_all_memories. Launched as a plain stdio console script — no
+  # OpenMemory image, no Qdrant, no uvx mcp-proxy bridge. The curated
+  # memory_direct layer below is authoritative; this is the supplemental
+  # long tail.
+  memory_episodic:
     enabled: true
     type: stdio
-    name: openmemory
-    description: Shared persistent memory (preferences, project decisions, playbooks) — also mounted by the OpenHands coder
-    cmd: uvx
-    args:
-      - mcp-proxy
-      - ${OPENMEMORY_MCP_URL}/mcp/goose/sse/${MEMORY_USER_ID}
+    name: memory_episodic
+    description: Episodic semantic memory (search_memory / add_memories) shared with the OpenHands coder — supplemental recall; use the curated index as the source of truth
+    cmd: ${CODER_BIN_DIR}/memory-episodic
+    args: []
+    envs:
+      MEMORY_USER_ID: ${MEMORY_USER_ID}
+      MEMORY_APP_NAME: goose
+      MEMORY_EMBEDDER_MODEL: ${MEMORY_EMBEDDER_MODEL}
+      MEMORY_EMBEDDING_DIMS: "${MEMORY_EMBEDDING_DIMS}"
+      MEMORY_EPISODIC_DIR: ${MEMORY_EPISODIC_DIR}
+      AWS_REGION: ${AWS_REGION}
     timeout: 120
 
   # ── Delegated implementer (OpenHands agent behind a task-shaped MCP) ─
@@ -52,10 +63,13 @@ extensions:
       OPENHANDS_LLM_BASE_URL: ${OPENHANDS_LLM_BASE_URL}
       OPENHANDS_LLM_API_KEY: ${OPENHANDS_LLM_API_KEY}
       OPENHANDS_MAX_ITERATIONS: "${OPENHANDS_MAX_ITERATIONS}"
-      OPENMEMORY_MCP_URL: ${OPENMEMORY_MCP_URL}
       MEMORY_USER_ID: ${MEMORY_USER_ID}
       MEMORY_APP_NAME: openhands
       MEMORY_NOTES_DIR: ${MEMORY_NOTES_DIR}
+      MEMORY_EMBEDDER_MODEL: ${MEMORY_EMBEDDER_MODEL}
+      MEMORY_EMBEDDING_DIMS: "${MEMORY_EMBEDDING_DIMS}"
+      MEMORY_EPISODIC_DIR: ${MEMORY_EPISODIC_DIR}
+      AWS_REGION: ${AWS_REGION}
       PREFERENCES_FILE: ${PROJECT_ROOT}/prefs/preferences.md
     timeout: 1800
 
@@ -63,8 +77,8 @@ extensions:
   # get_memory_index (read at session start) / save_note / read_note /
   # delete_note. Notes are plain files under MEMORY_NOTES_DIR — exact wording
   # preserved, human-reviewable, shared with the OpenHands coder. The
-  # openmemory extension remains the EPISODIC layer (semantic search over
-  # extracted fragments).
+  # memory_episodic extension above is the EPISODIC layer (semantic search
+  # over stored fragments); this one is the source of truth.
   memory_direct:
     enabled: true
     type: stdio

@@ -35,22 +35,23 @@ def _git(repo_path: str, *args: str) -> str:
 
 
 def _memory_mcp_config(client_name: str) -> dict:
-    """Shared-memory MCP config, if the OpenMemory stack is configured."""
-    base = _env("OPENMEMORY_MCP_URL")
-    user = _env("MEMORY_USER_ID")
-    if not base or not user:
-        return {}
-    servers = {
-        "openmemory": {
-            "url": f"{base.rstrip('/')}/mcp/{client_name}/sse/{user}",
-        }
-    }
-    # Curated notes (verbatim files + index). The console script lives next
-    # to our interpreter in both dev (uv venv) and installed (uv tool/pipx).
+    """Shared-memory MCP config: both layers run in-process as stdio servers.
+
+    No containers, no network endpoint — episodic recall and curated notes are
+    console scripts that live next to our interpreter (dev venv or uv
+    tool/pipx install) and inherit this process's MEMORY_* / AWS env. The
+    `client_name` arg is kept for signature compatibility (it identified the
+    caller to the old OpenMemory SSE endpoint) but is no longer needed.
+    """
     import sys
-    memory_direct = os.path.join(os.path.dirname(sys.executable), "memory-direct")
-    if os.path.isfile(memory_direct):
-        servers["memory_direct"] = {"command": memory_direct, "args": []}
+
+    servers: dict = {}
+    bin_dir = os.path.dirname(sys.executable)
+    for name, script in (("memory_episodic", "memory-episodic"),
+                         ("memory_direct", "memory-direct")):
+        path = os.path.join(bin_dir, script)
+        if os.path.isfile(path):
+            servers[name] = {"command": path, "args": []}
     return servers
 
 

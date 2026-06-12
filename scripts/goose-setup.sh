@@ -19,8 +19,12 @@ if [[ -f "$CONFIG_DIR/config.yaml" ]]; then
 fi
 
 # Substitute only our ${VARS}; leave anything unknown intact.
-# Default for older .env files that predate MEMORY_NOTES_DIR.
+# Defaults for .env files that leave the memory dirs / embedder blank.
 export MEMORY_NOTES_DIR="${MEMORY_NOTES_DIR:-$HOME/.local/share/agent-memory}"
+export MEMORY_EPISODIC_DIR="${MEMORY_EPISODIC_DIR:-$HOME/.local/share/agent-episodic}"
+export MEMORY_EMBEDDER_MODEL="${MEMORY_EMBEDDER_MODEL:-amazon.titan-embed-text-v2:0}"
+export MEMORY_EMBEDDING_DIMS="${MEMORY_EMBEDDING_DIMS:-1024}"
+export AWS_REGION="${AWS_REGION:-us-east-1}"
 
 # The Goose extensions launch console scripts by absolute path. Install the
 # package as a uv tool (editable, so repo edits take effect immediately).
@@ -29,7 +33,8 @@ export CODER_BIN_DIR="$(dirname "$(readlink -f "$(command -v openhands-coder 2>/
 [[ -x "$CODER_BIN_DIR/openhands-coder" ]] || CODER_BIN_DIR="$HOME/.local/bin"
 
 envsubst '${GOOSE_PLANNER_MODEL}
-${OPENMEMORY_MCP_URL} ${MEMORY_USER_ID} ${MEMORY_NOTES_DIR} ${PROJECT_ROOT}
+${MEMORY_USER_ID} ${MEMORY_NOTES_DIR} ${MEMORY_EPISODIC_DIR} ${PROJECT_ROOT}
+${MEMORY_EMBEDDER_MODEL} ${MEMORY_EMBEDDING_DIMS} ${AWS_REGION}
 ${OPENHANDS_LLM_MODEL} ${OPENHANDS_LLM_BASE_URL} ${OPENHANDS_LLM_API_KEY}
 ${OPENHANDS_MAX_ITERATIONS} ${CODER_BIN_DIR}' \
   < goose/config-template.yaml > "$CONFIG_DIR/config.yaml"
