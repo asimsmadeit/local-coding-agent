@@ -111,6 +111,8 @@ and fill them in (build commands, conventions).
 
 ## Documentation
 
+- `docs/QUICKSTART.md` — the full ordered path from a fresh Windows machine
+  to the running examples, with a verification gate at every phase
 - `docs/OVERVIEW.md` — architecture diagram, component breakdown, and what
   makes this different from hosted coding assistants
 - `docs/SETUP_FRESH_MACHINE.md` — detailed setup for macOS / Linux / Windows
