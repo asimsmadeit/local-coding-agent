@@ -1,8 +1,5 @@
 # Setup on a Fresh Machine
 
-Every command needed to go from a clean macOS, Linux, or Windows machine to a
-working agent stack. Total time: ~15 min. No GPU and no local models — all
-inference is AWS Bedrock (Claude / Nova).
 
 ## 0. Prerequisites
 
